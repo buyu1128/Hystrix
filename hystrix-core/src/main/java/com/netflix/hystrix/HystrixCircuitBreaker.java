@@ -139,6 +139,7 @@ public interface HystrixCircuitBreaker {
         private final HystrixCommandProperties properties;
         private final HystrixCommandMetrics metrics;
 
+        // 断路器只有3个状态，默认是关闭的
         enum Status {
             CLOSED, OPEN, HALF_OPEN;
         }
@@ -200,6 +201,7 @@ public interface HystrixCircuitBreaker {
                     });
         }
 
+        // 尝试服务成功之后，关闭断路器工作时间，重置统计数据，CAS修改断路器的状态
         @Override
         public void markSuccess() {
             if (status.compareAndSet(Status.HALF_OPEN, Status.CLOSED)) {
@@ -215,6 +217,7 @@ public interface HystrixCircuitBreaker {
             }
         }
 
+        // 当尝试服务失败就执行这个，设置断路器当前的工作时间，方便下个尝试周期进行
         @Override
         public void markNonSuccess() {
             if (status.compareAndSet(Status.HALF_OPEN, Status.OPEN)) {
@@ -234,6 +237,7 @@ public interface HystrixCircuitBreaker {
             return circuitOpened.get() >= 0;
         }
 
+        // 和attemptExecution类似，这个方法不会修改状态，仅仅是为了判断是否放行
         @Override
         public boolean allowRequest() {
             if (properties.circuitBreakerForceOpen().get()) {
@@ -253,29 +257,25 @@ public interface HystrixCircuitBreaker {
             }
         }
 
-        private boolean isAfterSleepWindow() {
-            final long circuitOpenTime = circuitOpened.get();
-            final long currentTime = System.currentTimeMillis();
-            final long sleepWindowTime = properties.circuitBreakerSleepWindowInMilliseconds().get();
-            return currentTime > circuitOpenTime + sleepWindowTime;
-        }
+
 
         @Override
         public boolean attemptExecution() {
+            // 强制熔断
             if (properties.circuitBreakerForceOpen().get()) {
                 return false;
             }
+            // 强制关闭熔断
             if (properties.circuitBreakerForceClosed().get()) {
                 return true;
             }
+            // 断路器打开时间为空也是强制关闭
             if (circuitOpened.get() == -1) {
                 return true;
             } else {
+                // 如果到达了一个时间窗口(短路器打开的时候，会有时间窗口尝试通过服务验证是否可用)
                 if (isAfterSleepWindow()) {
-                    //only the first request after sleep window should execute
-                    //if the executing command succeeds, the status will transition to CLOSED
-                    //if the executing command fails, the status will transition to OPEN
-                    //if the executing command gets unsubscribed, the status will transition to OPEN
+                   // 判断是否满足尝试调用验证服务是否正常，使用CAS修改断路器状态，保证只有1个线程可以修改该状态
                     if (status.compareAndSet(Status.OPEN, Status.HALF_OPEN)) {
                         return true;
                     } else {
@@ -286,10 +286,18 @@ public interface HystrixCircuitBreaker {
                 }
             }
         }
+
+        // 当前时间超过断路器打开时间，默认5000ms，返回true
+        private boolean isAfterSleepWindow() {
+            final long circuitOpenTime = circuitOpened.get();
+            final long currentTime = System.currentTimeMillis();
+            final long sleepWindowTime = properties.circuitBreakerSleepWindowInMilliseconds().get();
+            return currentTime > circuitOpenTime + sleepWindowTime;
+        }
     }
 
     /**
-     * An implementation of the circuit breaker that does nothing.
+     * 啥也不干的断路器空实现
      * 
      * @ExcludeFromJavadoc
      */
